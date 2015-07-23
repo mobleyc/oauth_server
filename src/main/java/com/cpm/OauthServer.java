@@ -2,8 +2,8 @@ package com.cpm;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.*;
-import org.springframework.boot.autoconfigure.*;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -13,23 +13,29 @@ import org.springframework.security.oauth2.config.annotation.web.configuration.E
 import org.springframework.security.oauth2.config.annotation.web.configurers.AuthorizationServerEndpointsConfigurer;
 import org.springframework.security.oauth2.config.annotation.web.configurers.AuthorizationServerSecurityConfigurer;
 import org.springframework.security.oauth2.provider.token.TokenStore;
-import org.springframework.security.oauth2.provider.token.store.InMemoryTokenStore;
+import org.springframework.security.oauth2.provider.token.store.JdbcTokenStore;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.web.bind.annotation.RestController;
 
-// Code ref: https://github.com/spring-projects/spring-security-oauth/blob/master/samples/oauth2/sparklr/src/main/java/org/springframework/security/oauth/examples/sparklr/config/OAuth2ServerConfig.java
-// SQL Schema ref: https://github.com/spring-projects/spring-security-oauth/blob/master/spring-security-oauth2/src/test/resources/schema.sql
-// Password storage ref: http://stackoverflow.com/questions/21058665/how-to-generate-client-secret-in-oauth2-authentication-using-spring
+import javax.sql.DataSource;
 
-// Generating a client secret:
-// 1. http://stackoverflow.com/questions/23652166/how-to-generate-oauth-2-client-id-and-secret
-
-// Endpoints
-// 1. https://github.com/spring-projects/spring-security-oauth/tree/master/spring-security-oauth2/src/main/java/org/springframework/security/oauth2/provider/endpoint
-
+/*
+ * Run
+ *     mvn package && java -jar target/oauth_server-1.0-SNAPSHOT.jar OR
+ *     mvn package spring-boot:run
+ *
+ * List of endpoints exposed by Spring Security OAuth 2
+ *   https://github.com/spring-projects/spring-security-oauth/tree/master/spring-security-oauth2/src/main/java/org/springframework/security/oauth2/provider/endpoint
+ *
+ * Other Notes:
+ *   Security for Microservices with Spring - http://presos.dsyer.com/decks/microservice-security.html
+ *   Generating a client secret - http://stackoverflow.com/questions/23652166/how-to-generate-oauth-2-client-id-and-secret
+ */
 @Configuration
 @ComponentScan
 @EnableAutoConfiguration
 @RestController
+@EnableTransactionManagement
 public class OauthServer {
 
     public static void main(String[] args) throws Exception {
@@ -43,6 +49,11 @@ public class OauthServer {
         @Autowired
         @Qualifier("authenticationManagerBean")
         private AuthenticationManager authenticationManager;
+
+
+        @Autowired
+        @Qualifier("dataSource")
+        private DataSource dataSource;
 
         /*
          * Examples:
@@ -67,7 +78,7 @@ public class OauthServer {
          */
         @Override
         public void configure(ClientDetailsServiceConfigurer clients) throws Exception {
-            clients.inMemory()
+            clients.jdbc(dataSource)
                     .withClient("my-client-with-secret")
                     .secret("secret")
                     /*
@@ -78,20 +89,26 @@ public class OauthServer {
                      *   "implicit"
                      *   "client_credentials"
                      */
-                    .authorizedGrantTypes("password")
+                    //Note: The OAuth spec does not allow refresh tokens for client_credentials grant types.
+                    .authorizedGrantTypes("client_credentials", "password", "refresh_token")
                     .scopes("default")
                     .authorities("ROLE_CLIENT")
+                    // Default 12 hours
+                    // ref: https://github.com/spring-projects/spring-security-oauth/blob/master/spring-security-oauth2/src/main/java/org/springframework/security/oauth2/provider/token/DefaultTokenServices.java
+                    // How long should an access token live? http://stackoverflow.com/questions/7030694/oauth2-why-do-access-tokens-expire
+                    .accessTokenValiditySeconds(3600)
+                    // Default 30 days
+                    .refreshTokenValiditySeconds(60 * 60 * 24 * 30)
                     .and()
-                    /*
-                     * Resource server needs access to /check_token endpoint. Other clients do not.
-                     */
+                    // Resource server needs access to /check_token endpoint. Other clients do not.
                     .withClient("resource-server")
                     .secret("secret")
                     .authorities("ROLE_TRUSTED_CLIENT");
         }
 
+        // For memory store use InMemoryTokenStore
         public TokenStore tokenStore() {
-            return new InMemoryTokenStore();
+            return new JdbcTokenStore(dataSource);
         }
 
         @Override
